@@ -1,0 +1,25 @@
+sources:
+  - name: cloud-11
+    # Server connection details are now loaded from .env file
+    # user: set SSH_USER in .env
+    # host: set SSH_HOST in .env  
+    # remote_path: set REMOTE_PATH in .env
+
+    # Labels written into curated dataset (can also be set in .env):
+    experiment_label: "kraken1.0_vs_INES"  # or set EXPERIMENT_LABEL in .env
+    schema_version: "v1"                    # or set SCHEMA_VERSION in .env
+
+    # iCloud backup config (can also be set in .env):
+    # icloud_backup: set ICLOUD_BACKUP in .env
+    # icloud_dest: set ICLOUD_DEST in .env
+
+analysis:
+  # Minimal required columns to warn on (don't overdo this list)
+  required_columns:
+    - ines_simulation_id
+    - kraken_simulation_id
+    - network_size
+    - ines_cost
+    - kraken_cost
+    - ines_latency
+    - kraken_latency

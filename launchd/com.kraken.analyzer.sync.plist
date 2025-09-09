@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.kraken.analyzer.sync</string>
+    
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/make</string>
+        <string>-C</string>
+        <string>/Users/finn/Projects/kraken_analyzer</string>
+        <string>analyze</string>
+    </array>
+    
+    <key>WorkingDirectory</key>
+    <string>/Users/finn/Projects/kraken_analyzer</string>
+    
+    <key>StandardOutPath</key>
+    <string>/Users/finn/Projects/kraken_analyzer/logs/scheduler.out.log</string>
+    
+    <key>StandardErrorPath</key>
+    <string>/Users/finn/Projects/kraken_analyzer/logs/scheduler.err.log</string>
+    
+    <key>StartInterval</key>
+    <integer>3600</integer>
+    
+    <key>RunAtLoad</key>
+    <false/>
+    
+    <key>KeepAlive</key>
+    <false/>
+    
+    <key>LaunchOnlyOnce</key>
+    <false/>
+    
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
+    </dict>
+    
+</dict>
+</plist>
