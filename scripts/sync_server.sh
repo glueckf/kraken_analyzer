@@ -10,9 +10,9 @@ if [ -f "$ENV_FILE" ]; then
   set -a  # automatically export all variables
   source "$ENV_FILE"
   set +a  # turn off automatic export
-  echo "📁 Loaded config from .env file"
+  echo "Loaded config from .env file"
 else
-  echo "⚠️  .env file not found, falling back to sources.yaml"
+  echo ".env file not found, falling back to sources.yaml"
   # Fallback to YAML reads (for backwards compatibility)
   SSH_HOST=${SSH_HOST:-$(awk '/host:/{print $2}' "$CFG" | head -n1)}
   SSH_USER=${SSH_USER:-$(awk '/user:/{print $2}' "$CFG" | head -n1)}
@@ -46,7 +46,7 @@ ts="$(date -u +"%Y-%m-%dT%H-%M-%SZ")"
 tmp="$snap_dir/.run_results.${ts}.tmp.csv"
 dst="$snap_dir/run_results.${ts}.csv"
 
-echo "🔄 Pulling from $user@$host:$remote_path"
+echo "Pulling from $user@$host:$remote_path"
 
 # 1) First rsync to a temp file (resumable, read-only, gentle)
 #    --bwlimit optional if you want to throttle (uncomment to use)
@@ -72,20 +72,20 @@ done
 
 # 3) Atomic local move
 mv "$tmp" "$dst"
-echo "📥 Snapshot: $dst"
+echo "Snapshot: $dst"
 
 # 4) Update absolute 'latest' symlink
 latest="$raw_dir/latest.csv"
 rm -f "$latest"
 ln -s "$(cd "$(dirname "$dst")" && pwd)/$(basename "$dst")" "$latest"
-echo "🔗 Updated latest -> $latest"
+echo "Updated latest -> $latest"
 
 # 5) Optional iCloud mirror to your exact folder
 if [[ "${icloud_backup:-false}" == "true" && -n "${icloud_dest:-}" ]]; then
   mkdir -p "$icloud_dest"
   cp "$dst" "$icloud_dest/run_results.${ts}.csv"
   cp "$dst" "$icloud_dest/latest.csv"
-  echo "☁️  iCloud mirror updated: $icloud_dest"
+  echo "iCloud mirror updated: $icloud_dest"
 fi
 
 echo "Sync complete."
