@@ -112,8 +112,13 @@ The system still supports YAML configuration for backwards compatibility, but `.
 ### Core Operations
 - `make analyze` - One-click: pull data + ingest + ready for analysis
 - `make sync` - Pull data from server only  
-- `make ingest` - Process snapshots into curated Parquet only
+- `make ingest` - Process snapshots into curated Parquet (incremental)
 - `make status` - Show current data status
+
+### Experiment Management
+- `make experiment-status` - Show current experiment data breakdown
+- `make ingest-reset` - Reset parquet file and reprocess all snapshots from scratch
+- `make fix-labels` - Fix experiment labels when data was incorrectly labeled
 
 ### Automation
 - `make start-scheduler` - Start automated updates (every 60 min)
@@ -135,13 +140,14 @@ The system still supports YAML configuration for backwards compatibility, but `.
 - Mirrors to iCloud backup folder
 
 ### 2. Data Ingestion (`make ingest`)
-- Reads all CSV snapshots from `data/raw/cloud-11/snapshots/`
+- **Incremental processing**: Only processes new snapshots that haven't been ingested yet
+- Preserves existing experiment labels (no overwriting of old data)
 - Unions all columns (handles schema evolution)
 - Normalizes numeric columns where possible
 - Deduplicates by `(experiment_label, kraken_simulation_id, ines_simulation_id)`
-- Adds metadata: experiment_label, schema_version, source, synced_at
+- Adds metadata: experiment_label, schema_version, source, synced_at, snapshot_file
 - Computes derived metrics (cost/latency deltas and improvements)
-- Writes single `experiments.parquet` file
+- Appends to or creates `experiments.parquet` file
 
 ### 3. Analysis
 - Notebooks read from `data/curated/experiments.parquet`
@@ -159,6 +165,64 @@ The system handles schema changes gracefully:
 **When starting a new experiment**: Change only `EXPERIMENT_LABEL` in `.env`
 
 **When CSV format truly changes**: Bump `SCHEMA_VERSION` to track different formats
+
+## Managing Multiple Experiments
+
+The system now supports running multiple experiments safely without data corruption:
+
+### Starting a New Experiment
+
+1. **Update experiment label** in `.env`:
+   ```bash
+   EXPERIMENT_LABEL=kraken2.0_vs_INES  # Change to new experiment name
+   ```
+
+2. **Continue normal workflow**:
+   ```bash
+   make analyze  # New data will be labeled with new experiment label
+   ```
+
+3. **View experiment breakdown**:
+   ```bash
+   make experiment-status
+   ```
+
+### Filtering in Notebooks
+
+Filter by experiment in your analysis:
+```python
+import pandas as pd
+
+df = pd.read_parquet('data/curated/experiments.parquet')
+
+# Filter to specific experiment
+kraken1_data = df[df['experiment_label'] == 'kraken1.0_vs_INES']
+kraken2_data = df[df['experiment_label'] == 'kraken2.0_vs_INES']
+
+# Show experiment breakdown
+print("Available experiments:")
+print(df['experiment_label'].value_counts())
+```
+
+### Fixing Mislabeled Data
+
+If you accidentally changed the experiment label mid-experiment and need to fix the data:
+
+```bash
+# Show current status first
+make experiment-status
+
+# Fix labels with a timestamp cutoff
+make fix-labels CUTOFF=2025-09-10T06:45:00 OLD=kraken1.0_vs_INES NEW=kraken1.1_vs_INES
+```
+
+### Starting Fresh
+
+If you need to completely reset and reprocess all data:
+
+```bash
+make ingest-reset  # ⚠️ This deletes existing parquet file and rebuilds from all snapshots
+```
 
 ## Safety Features
 

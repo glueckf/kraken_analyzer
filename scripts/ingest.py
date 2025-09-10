@@ -6,6 +6,7 @@ Reads all CSV snapshots, unions columns, deduplicates rows,
 and writes a single curated Parquet file for analysis.
 """
 
+import argparse
 import hashlib
 import logging
 import os
@@ -167,20 +168,45 @@ def compute_derived_metrics(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def process_snapshots(config: Dict[str, Any], snapshots_dir: Path) -> pd.DataFrame:
-    """Process all snapshot files into a unified dataset."""
+def get_processed_snapshots(output_path: Path) -> set:
+    """Get list of snapshots that have already been processed."""
+    if not output_path.exists():
+        return set()
+    
+    try:
+        existing_df = pd.read_parquet(output_path)
+        if "snapshot_file" in existing_df.columns:
+            return set(existing_df["snapshot_file"].unique())
+    except Exception as e:
+        logger.warning(f"Could not read existing parquet file: {e}")
+    
+    return set()
+
+
+def process_snapshots(config: Dict[str, Any], snapshots_dir: Path, output_path: Path) -> pd.DataFrame:
+    """Process only new snapshot files and append to existing dataset."""
     snapshot_files = get_snapshot_files(snapshots_dir)
 
     if not snapshot_files:
         logger.warning("No snapshot files found")
         return pd.DataFrame()
 
+    # Get list of already processed snapshots
+    processed_snapshots = get_processed_snapshots(output_path)
+    new_snapshot_files = [f for f in snapshot_files if f.name not in processed_snapshots]
+    
+    if not new_snapshot_files:
+        logger.info("No new snapshot files to process")
+        return pd.DataFrame()
+    
+    logger.info(f"Found {len(new_snapshot_files)} new snapshots to process (out of {len(snapshot_files)} total)")
+
     all_dataframes = []
     source_config = config["sources"][0]  # Assuming single source for now
 
-    for filepath in snapshot_files:
+    for filepath in new_snapshot_files:
         try:
-            logger.info(f"Processing snapshot: {filepath.name}")
+            logger.info(f"Processing new snapshot: {filepath.name}")
 
             # Read CSV
             df = pd.read_csv(filepath)
@@ -188,10 +214,11 @@ def process_snapshots(config: Dict[str, Any], snapshots_dir: Path) -> pd.DataFra
                 f"Loaded {len(df)} rows, {len(df.columns)} columns from {filepath.name}"
             )
 
-            # Add metadata columns
+            # Add metadata columns - use current experiment label for new snapshots
             df["experiment_label"] = source_config["experiment_label"]
             df["schema_version"] = source_config["schema_version"]
             df["source"] = source_config["name"]
+            df["snapshot_file"] = filepath.name  # Track which snapshot this came from
 
             # Extract timestamp from filename
             timestamp = extract_timestamp_from_filename(filepath)
@@ -204,15 +231,25 @@ def process_snapshots(config: Dict[str, Any], snapshots_dir: Path) -> pd.DataFra
             continue
 
     if not all_dataframes:
-        logger.error("No dataframes were successfully processed")
+        logger.info("No new data to process")
         return pd.DataFrame()
 
-    # Union all dataframes (pandas handles column alignment automatically)
-    logger.info("Unioning all dataframes...")
+    # Union all new dataframes
+    logger.info("Unioning new dataframes...")
     combined_df = pd.concat(all_dataframes, ignore_index=True, sort=False)
     logger.info(
-        f"Combined dataset: {len(combined_df)} rows, {len(combined_df.columns)} columns"
+        f"New data: {len(combined_df)} rows, {len(combined_df.columns)} columns"
     )
+
+    # Load existing data and combine with new data
+    if output_path.exists():
+        try:
+            existing_df = pd.read_parquet(output_path)
+            logger.info(f"Loading existing data: {len(existing_df)} rows")
+            combined_df = pd.concat([existing_df, combined_df], ignore_index=True, sort=False)
+            logger.info(f"Total combined data: {len(combined_df)} rows")
+        except Exception as e:
+            logger.warning(f"Could not load existing data: {e}, treating as new dataset")
 
     # Normalize numeric columns
     logger.info("Normalizing numeric columns...")
@@ -257,6 +294,14 @@ def validate_required_columns(df: pd.DataFrame, required_columns: List[str]) -> 
 
 def main():
     """Main ingest process."""
+    parser = argparse.ArgumentParser(description="Ingest Kraken experiment data")
+    parser.add_argument(
+        "--reset", 
+        action="store_true", 
+        help="Reset the parquet file and reprocess all snapshots from scratch"
+    )
+    args = parser.parse_args()
+    
     # Setup paths
     root_dir = Path(__file__).parent.parent
     config_path = root_dir / "configs" / "sources.yaml"
@@ -267,6 +312,14 @@ def main():
 
     # Ensure directories exist
     curated_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Handle reset option
+    if args.reset:
+        if output_path.exists():
+            logger.info("Resetting: removing existing parquet file")
+            output_path.unlink()
+        else:
+            logger.info("Reset requested but no existing parquet file found")
 
     # Load configuration
     logger.info(f"Loading config from {config_path}")
@@ -274,11 +327,15 @@ def main():
 
     # Process snapshots
     logger.info("Starting data ingestion...")
-    df = process_snapshots(config, snapshots_dir)
+    df = process_snapshots(config, snapshots_dir, output_path)
 
     if df.empty:
-        logger.error("No data to write")
-        sys.exit(1)
+        if args.reset or not output_path.exists():
+            logger.error("No data to write")
+            sys.exit(1)
+        else:
+            logger.info("No new data to process, existing file unchanged")
+            return
 
     # Validate required columns
     required_columns = config.get("analysis", {}).get("required_columns", [])
