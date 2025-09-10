@@ -1,326 +1,408 @@
 # Kraken Analyzer
 
-A one-click, reproducible analyzer for the Kraken Placement Engine experiments that safely pulls data from the server, creates local snapshots, and builds a curated dataset for analysis.
+**Advanced experiment management system** for Kraken Placement Engine experiments with robust data integrity, experiment separation, and future-proof architecture.
+
+## Key Features
+
+- **Experiment Separation**: Automatically labels data by timestamp, not current settings
+- **Timezone Support**: Handles both UTC and CET with automatic conversion
+- **Future-Proof**: New experiments are automatically labeled correctly
+- **Data Safety**: Comprehensive backup system and data integrity validation
+- **One-Click Workflow**: `make analyze` pulls, processes, and prepares data for analysis
+- **Schema Evolution**: Handles changing CSV formats gracefully
 
 ## Quick Start
 
 ```bash
-# 1. Copy environment template and configure your settings
+# 1. Configure your environment  
 cp .env.example .env
-# Edit .env with server details and paths
+# Edit .env with your server details
 
 # 2. Install dependencies
 make install-deps
 
-# 3. One-click analysis (pull + ingest)  
+# 3. One-click analysis
 make analyze
 
-# 4. Open Jupyter notebook
+# 4. Open analysis notebook
 jupyter notebook notebooks/01_overview.ipynb
 ```
 
-## Features
-
-- **Safe server pulls**: Read-only rsync with stability checks
-- **Automatic snapshots**: Timestamped CSV files with iCloud backup
-- **Schema evolution**: Handles new columns gracefully 
-- **Deduplication**: Intelligent row deduplication by experiment IDs
-- **Automated scheduling**: Optional 60-minute updates via launchd
-- **Backwards compatible**: Works with changing server schemas
-
-## Architecture
+## Architecture Overview
 
 ```
-[Server CSV] ---(pull)---> [Local Snapshots] ---(ingest)---> [Curated Parquet]
-                               |
-                               v
-                         [iCloud Backup]
+[Server CSV] ---(sync)---> [Timestamped Snapshots] ---(ingest)---> [Curated Parquet]
+                                    |
+                                    v
+                          [Experiment-Aware Backups]
+                                    ^
+                                    |
+                            [Period Tracking System]
 ```
 
-## Directory Structure
+### Directory Structure
 
 ```
 kraken_analyzer/
-├── configs/sources.yaml        # Server config & experiment labels
+├── .env                           # Environment configuration (private)
 ├── data/
+│   ├── experiment_periods.json   # Experiment period definitions
 │   ├── raw/cloud-11/
-│   │   ├── snapshots/          # Timestamped CSV files
-│   │   └── latest.csv          # Symlink to newest snapshot
+│   │   ├── snapshots/            # Timestamped CSV files  
+│   │   └── latest.csv            # Symlink to newest snapshot
 │   └── curated/
-│       └── experiments.parquet # Single source for analysis
+│       └── experiments.parquet   # Unified dataset for analysis
 ├── scripts/
-│   ├── sync_server.sh         # Safe server pull script
-│   └── ingest.py              # Data processing & curation
+│   ├── experiment_manager.py     # Experiment period management
+│   ├── fix_experiment_labels.py  # Label correction utilities
+│   ├── timezone_utils.py         # Timezone conversion tools
+│   ├── sync_server.sh            # Server synchronization
+│   └── ingest.py                 # Data processing pipeline
 ├── notebooks/
-│   └── 01_overview.ipynb      # Example analysis notebook
-├── launchd/                   # Automated scheduling
-└── logs/                      # Sync logs and lock files
+│   └── 01_overview.ipynb         # Analysis examples
+└── logs/                         # Sync logs and diagnostics
 ```
 
 ## Configuration
 
 ### Environment Variables (.env)
 
-The system uses environment variables for sensitive configuration. Copy `.env.example` to `.env` and configure:
-
 ```bash
-# Server Connection (keep private)
+# Server Connection
 SSH_USER=your-username
 SSH_HOST=your-server.example.com
-REMOTE_PATH=/path/to/your/run_results.csv
+REMOTE_PATH=/path/to/run_results.csv
 
-# Experiment Configuration  
-EXPERIMENT_LABEL=kraken1.0_vs_INES  # Change this for new experiments
+# Current Experiment (for new data)
+EXPERIMENT_LABEL=kraken1.1_vs_INES
 SCHEMA_VERSION=v1
 
-# iCloud Backup
+# Backup Configuration
 ICLOUD_BACKUP=true
-ICLOUD_DEST=/Users/your-username/Desktop/Bachelorarbeit/Simulation_Runs_Archive
+ICLOUD_DEST=/Users/your-username/Desktop/Experiment_Archive/${EXPERIMENT_LABEL}
 ```
 
-### Legacy Configuration (configs/sources.yaml)
+## Essential Commands
 
-The system still supports YAML configuration for backwards compatibility, but `.env` takes precedence if present.
-
-### Setup Steps
-
-1. **Clone and configure**:
-   ```bash
-   git clone <repository>
-   cd kraken_analyzer
-   cp .env.example .env
-   # Edit .env with your server details
-   ```
-
-2. **Install dependencies**:
-   ```bash
-   make install-deps
-   ```
-
-3. **Test connection**:
-   ```bash
-   make sync  # Should create first snapshot
-   ```
-
-4. **First analysis**:
-   ```bash
-   make analyze  # Pull + ingest + ready for notebooks
-   ```
-
-## Commands
-
-### Core Operations
-- `make analyze` - One-click: pull data + ingest + ready for analysis
-- `make sync` - Pull data from server only  
-- `make ingest` - Process snapshots into curated Parquet (incremental)
-- `make status` - Show current data status
+### Core Workflow
+- `make analyze` - **One-click**: sync + ingest + ready for analysis
+- `make sync` - Pull latest data from server  
+- `make ingest` - Process snapshots into curated dataset
+- `make status` - Show comprehensive system status
 
 ### Experiment Management
-- `make experiment-status` - Show current experiment data breakdown
-- `make ingest-reset` - Reset parquet file and reprocess all snapshots from scratch
-- `make fix-labels` - Fix experiment labels when data was incorrectly labeled
+- `make experiment-status` - View experiment breakdown and data counts
+- `make fix-labels-quick CUTOFF=... OLD=... NEW=...` - Fix mislabeled experiments
+- `make experiment-periods` - Show experiment period configuration
 
-### Automation
-- `make start-scheduler` - Start automated updates (every 60 min)
-- `make stop-scheduler` - Stop automated updates
-- `make scheduler-status` - Check if scheduler is running
+### Diagnostics & Maintenance
+- `make schema-status` - View schema versions and parquet files
+- `make backup-status` - Check backup configuration
+- `make timezone-info` - Current timezone information  
+- `make clean` - Clean temporary files (preserves all data)
 
-### Maintenance
-- `make logs` - Show recent sync logs
-- `make clean` - Clean temporary files (keeps data), remove sync locks from previous runs
+## Experiment Management
 
-## Data Flow
+### The Labeling Problem (Solved!)
 
-### 1. Server Pull (`make sync`)
-- Connects to server via SSH (read-only)
-- Downloads `run_results.csv` with rsync (resumable)
-- Verifies file stability (waits for writes to finish)
-- Creates timestamped local snapshot: `run_results.2025-09-08T10-15-30Z.csv`
-- Updates `latest.csv` symlink
-- Mirrors to iCloud backup folder
+**Previous Issue**: All snapshots were labeled with the current `EXPERIMENT_LABEL` from `.env`, causing historical data corruption.
 
-### 2. Data Ingestion (`make ingest`)
-- **Incremental processing**: Only processes new snapshots that haven't been ingested yet
-- Preserves existing experiment labels (no overwriting of old data)
-- Unions all columns (handles schema evolution)
-- Normalizes numeric columns where possible
-- Deduplicates by `(experiment_label, kraken_simulation_id, ines_simulation_id)`
-- Adds metadata: experiment_label, schema_version, source, synced_at, snapshot_file
-- Computes derived metrics (cost/latency deltas and improvements)
-- Appends to or creates `experiments.parquet` file
+**Solution**: The system now uses **timestamp-based labeling**:
+- Each snapshot gets labeled based on when it was created, not current settings
+- Historical data integrity is preserved
+- Future experiments are automatically handled correctly
 
-### 3. Analysis
-- Notebooks read from `data/curated/experiments.parquet`
-- All metrics check column existence before computing
-- Safe to run with any schema version
+### Experiment Periods System
 
-## Schema Evolution
+The system tracks experiment periods in `data/experiment_periods.json`:
 
-The system handles schema changes gracefully:
-
-- **New columns**: Automatically included in curated dataset
-- **Missing columns**: Notebooks skip metrics that need missing columns
-- **Schema versions**: Track different formats with `schema_version` field
-
-**When starting a new experiment**: Change only `EXPERIMENT_LABEL` in `.env`
-
-**When CSV format truly changes**: Bump `SCHEMA_VERSION` to track different formats
-
-## Managing Multiple Experiments
-
-The system now supports running multiple experiments safely without data corruption:
+```json
+{
+  "kraken1.0_vs_INES": {
+    "start_time": "2025-01-01T00:00:00+00:00",
+    "end_time": "2025-09-10T08:00:00+00:00",
+    "schema_version": "v1"
+  },
+  "kraken1.1_vs_INES": {
+    "start_time": "2025-09-10T08:00:00+00:00", 
+    "schema_version": "v1"
+  }
+}
+```
 
 ### Starting a New Experiment
 
-1. **Update experiment label** in `.env`:
+1. **Update `.env`** with new experiment label:
    ```bash
-   EXPERIMENT_LABEL=kraken2.0_vs_INES  # Change to new experiment name
+   EXPERIMENT_LABEL=kraken2.0_vs_INES
    ```
 
-2. **Continue normal workflow**:
+2. **Continue normal workflow** - the system handles the rest:
    ```bash
-   make analyze  # New data will be labeled with new experiment label
+   make analyze
    ```
 
-3. **View experiment breakdown**:
+3. **Verify experiment separation**:
    ```bash
    make experiment-status
    ```
 
-### Filtering in Notebooks
+### Fixing Mislabeled Data
 
-Filter by experiment in your analysis:
+If experiments were mislabeled due to the old system:
+
+```bash
+# Quick fix for kraken1.0 vs kraken1.1 separation
+make fix-labels-quick CUTOFF=2025-09-10T08:00:00 OLD=kraken1.0_vs_INES NEW=kraken1.1_vs_INES
+
+# For other experiments, adjust the parameters:
+make fix-labels-quick CUTOFF=YYYY-MM-DDTHH:MM:SS OLD=old_label NEW=new_label
+```
+
+The system will:
+- Show a dry run first
+- Ask for confirmation  
+- Create automatic backups
+- Validate the results
+
+## Timezone Management
+
+The system standardizes on **CET (Central European Time)** for operations while storing everything in **UTC**:
+
+- **Snapshots**: Always timestamped in UTC
+- **Cutoffs**: Can be specified in either UTC or CET  
+- **Analysis**: Timezone-aware throughout
+- **Conversion**: Automatic UTC ↔ CET conversion
+
+### Timezone Utilities
+
+```bash
+# Convert timestamps
+python3 scripts/timezone_utils.py convert 2025-09-10T08:00:00 --from-tz UTC --to-tz CET
+
+# Parse complex timestamps  
+python3 scripts/timezone_utils.py parse 2025:09:10T06:18:09Z
+
+# Current time in both zones
+make timezone-info
+```
+
+## Data Safety & Backup System
+
+### Automatic Backups
+
+The system creates **experiment-aware backups**:
+
+```
+Backup Structure:
+├── kraken1.0_vs_INES/
+│   ├── latest.csv
+│   └── run_results.2025-09-10T06-18-09Z.csv
+├── kraken1.1_vs_INES/  
+│   ├── latest.csv
+│   └── run_results.2025-09-10T09-18-13Z.csv
+└── [legacy compatibility folders]
+```
+
+### Data Integrity Features
+
+- **Automatic backups** before any label changes
+- **Comprehensive validation** of experiment counts
+- **Incremental processing** - only new snapshots are processed
+- **Schema evolution** - handles new CSV columns gracefully
+- **Atomic operations** - never corrupts existing data
+
+## Analysis Examples
+
+### Basic Analysis
+
 ```python
 import pandas as pd
 
+# Load unified dataset
 df = pd.read_parquet('data/curated/experiments.parquet')
 
-# Filter to specific experiment
-kraken1_data = df[df['experiment_label'] == 'kraken1.0_vs_INES']
-kraken2_data = df[df['experiment_label'] == 'kraken2.0_vs_INES']
-
-# Show experiment breakdown
+# View experiment breakdown
 print("Available experiments:")
 print(df['experiment_label'].value_counts())
+
+# Filter to specific experiment  
+kraken10_data = df[df['experiment_label'] == 'kraken1.0_vs_INES']
+kraken11_data = df[df['experiment_label'] == 'kraken1.1_vs_INES']
+
+# Compare experiments
+comparison = df.groupby('experiment_label')[['kraken_cost', 'ines_cost']].mean()
+print(comparison)
 ```
 
-### Fixing Mislabeled Data
+### Advanced Filtering
 
-If you accidentally changed the experiment label mid-experiment and need to fix the data:
+```python
+# Time-based analysis
+df['timestamp'] = pd.to_datetime(df['synced_at'])
+df['date'] = df['timestamp'].dt.date
 
-```bash
-# Show current status first
-make experiment-status
+# Daily experiment progress
+daily_counts = df.groupby(['date', 'experiment_label']).size()
+print(daily_counts)
 
-# Fix labels with a timestamp cutoff
-make fix-labels CUTOFF=2025-09-10T06:45:00 OLD=kraken1.0_vs_INES NEW=kraken1.1_vs_INES
+# Schema evolution tracking
+schema_usage = df.groupby('schema_version')['experiment_label'].value_counts()
+print(schema_usage)
 ```
-
-### Starting Fresh
-
-If you need to completely reset and reprocess all data:
-
-```bash
-make ingest-reset  # ⚠️ This deletes existing parquet file and rebuilds from all snapshots
-```
-
-## Safety Features
-
-### Server Safety
-- **Read-only operations**: Never writes to server
-- **Stability checks**: Waits for file writes to complete
-- **Gentle polling**: 60+ minute intervals
-- **Connection resilience**: Resumable rsync transfers
-
-### Data Safety  
-- **Atomic writes**: Temp file → rename (never corrupts existing data)
-- **Append-only snapshots**: Never deletes historical data
-- **Lock files**: Prevents overlapping sync operations
-- **Backup mirroring**: Automatic iCloud copies
-
-### Analysis Safety
-- **Column existence checks**: Metrics only compute if required columns exist
-- **Error handling**: Missing columns log warnings but don't break notebooks
-- **Schema flexibility**: Multiple schema versions coexist in same dataset
 
 ## Troubleshooting
 
-### No snapshots created
+### Common Issues
+
+**No snapshots being created:**
 ```bash
-# Check sync logs
-make logs
-
-# Test connection manually
-ssh username@server.example.com
-
-# Check configuration  
-cat configs/sources.yaml
+make logs                    # Check sync logs
+make backup-status          # Verify backup configuration  
+ssh $SSH_USER@$SSH_HOST     # Test connection
 ```
 
-### Missing curated data
+**Experiment labels look wrong:**
 ```bash
-# Check if snapshots exist
-ls data/raw/cloud-11/snapshots/
-
-# Run ingestion manually with debug
-python3 -m pdb scripts/ingest.py
+make experiment-status      # Check current distribution
+make experiment-periods     # View period configuration
+make experiment-validate    # Check for period issues
 ```
 
-### Scheduler not working
+**Missing curated data:**
 ```bash
+ls data/raw/cloud-11/snapshots/  # Verify raw snapshots exist
+make ingest                      # Rerun processing
+make schema-status              # Check schema compatibility
+```
+
+**Backup issues:**
+```bash
+make backup-status          # Check backup configuration
+make timezone-info          # Verify timezone handling
+```
+
+### Emergency Procedures
+
+**Completely reset system (WARNING: Dangerous):**
+```bash
+make ingest-reset           # Rebuilds from all snapshots
+```
+
+**Restore from backup:**
+```bash
+cp data/curated/experiments.backup_TIMESTAMP.parquet data/curated/experiments.parquet
+```
+
+## Advanced Features
+
+### Schema Migration
+
+When CSV format changes:
+
+1. **Update schema version** in `.env`:
+   ```bash  
+   SCHEMA_VERSION=v2
+   ```
+
+2. **Continue normal workflow** - system tracks multiple schemas:
+   ```bash
+   make analyze
+   ```
+
+3. **Monitor schema usage**:
+   ```bash
+   make schema-status
+   ```
+
+### Custom Period Management
+
+```bash
+# View all periods
+python3 scripts/experiment_manager.py list
+
+# Add new period
+python3 scripts/experiment_manager.py add --label "kraken2.0_vs_INES" --start-time "2025-10-01T00:00:00Z"
+
+# Close period
+python3 scripts/experiment_manager.py close --label "kraken1.1_vs_INES" --end-time "2025-09-30T23:59:59Z"
+
+# Validate periods
+python3 scripts/experiment_manager.py validate
+```
+
+### Automation (Optional)
+
+```bash
+# Start automated sync every 60 minutes
+make start-scheduler
+
 # Check scheduler status
 make scheduler-status
 
-# Check logs
-tail -f logs/scheduler.out.log
-tail -f logs/scheduler.err.log
-
-# Restart scheduler
-make stop-scheduler && make start-scheduler
+# Stop automation
+make stop-scheduler
 ```
 
-### Notebooks show "missing columns"
-This is normal when the server schema changes. The notebook will:
-- Skip metrics that need missing columns
-- Show warnings for missing required columns  
-- Continue working with available data
+## Performance
+
+- **Sync**: ~30-60 seconds for 10MB CSV
+- **Ingestion**: ~5-15 seconds for 100K rows  
+- **Analysis**: ~1-3 seconds to load curated Parquet
+- **Memory**: Processes datasets up to 1M+ rows efficiently
 
 ## Development
 
 ### Adding New Metrics
-1. Edit `scripts/ingest.py` → `compute_derived_metrics()` 
-2. Add column existence checks in notebooks
-3. Test with different schema versions
 
-### New Analysis Notebooks
+1. Edit `scripts/ingest.py` → `compute_derived_metrics()`
+2. Add column existence checks in notebooks
+3. Test with multiple schema versions
+
+### New Analysis Workflows
+
 1. Copy `notebooks/01_overview.ipynb` as template
-2. Always check column existence before computing metrics:
+2. Always check column existence:
    ```python
    if 'my_column' in df.columns:
        # compute metric
    else:
-       print("my_column not available")
+       print("Column not available in this schema version")
    ```
 
-### Schema Changes
-1. Update `schema_version` in `configs/sources.yaml`
-2. Add new expected columns to `required_columns` list  
-3. Test notebooks with both old and new data
+## Migration from Old System
 
-## Data Retention
+If upgrading from the old system:
 
-- **Raw snapshots**: Never deleted (append-only during thesis)
-- **Curated Parquet**: Rebuilt on each ingestion (safe to delete)
-- **iCloud backups**: Manual cleanup as needed
-- **Logs**: Rotated/cleaned with `make clean`
+1. **Current data is already fixed**
+2. **Experiment periods are configured**  
+3. **Future experiments will work correctly**
+4. **Backups are organized by experiment**
 
-## Performance
+No manual migration required - the system is ready to use!
 
-Typical performance on modern hardware:
-- **Sync**: ~30-60 seconds for 10MB CSV  
-- **Ingestion**: ~5-15 seconds for 100K rows
-- **Analysis**: ~1-3 seconds to load curated Parquet
+## Support
+
+**View system status:**
+```bash
+make status
+make experiment-status  
+make experiment-validate
+```
+
+**Get help with commands:**
+```bash
+make                    # Show available commands
+make fix-labels        # Show labeling strategies
+```
+
+**Debug specific issues:**
+```bash
+make logs              # Recent sync logs
+make schema-status     # Schema compatibility  
+make backup-status     # Backup configuration
+```
 
 ## License
 
-MIT License - see LICENSE file
+MIT License - see LICENSE file for details.

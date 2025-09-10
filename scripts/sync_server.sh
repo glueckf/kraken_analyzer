@@ -42,7 +42,7 @@ else
   exit 0
 fi
 
-ts="$(date -u +"%Y-%m-%dT%H-%M-%SZ")"
+ts="$(TZ='Europe/Berlin' date +"%Y-%m-%dT%H-%M-%S%z")"
 tmp="$snap_dir/.run_results.${ts}.tmp.csv"
 dst="$snap_dir/run_results.${ts}.csv"
 
@@ -80,12 +80,48 @@ rm -f "$latest"
 ln -s "$(cd "$(dirname "$dst")" && pwd)/$(basename "$dst")" "$latest"
 echo "Updated latest -> $latest"
 
-# 5) Optional iCloud mirror to your exact folder
+# 5) Optional iCloud mirror with experiment-aware organization
 if [[ "${icloud_backup:-false}" == "true" && -n "${icloud_dest:-}" ]]; then
-  mkdir -p "$icloud_dest"
-  cp "$dst" "$icloud_dest/run_results.${ts}.csv"
-  cp "$dst" "$icloud_dest/latest.csv"
-  echo "iCloud mirror updated: $icloud_dest"
+  # Determine experiment label for this snapshot based on timestamp
+  experiment_label="$EXPERIMENT_LABEL"  # default from .env
+  
+  # Try to determine experiment label using our period system
+  periods_file="$ROOT_DIR/data/experiment_periods.json"
+  if [ -f "$periods_file" ] && command -v python3 > /dev/null; then
+    # Use our experiment manager to determine the correct label
+    experiment_label=$(python3 -c "
+import sys
+sys.path.append('$ROOT_DIR/scripts')
+from experiment_manager import ExperimentPeriodManager
+from datetime import datetime, timezone
+
+# Parse timestamp from filename
+timestamp_str = '$ts'
+dt = datetime.strptime(timestamp_str, '%Y-%m-%dT%H-%M-%S%z')
+
+# Get experiment label
+try:
+    from pathlib import Path
+    manager = ExperimentPeriodManager(Path('$periods_file'))
+    label = manager.get_experiment_for_timestamp(dt)
+    print(label)
+except Exception as e:
+    # Fallback to environment variable
+    print('$EXPERIMENT_LABEL')
+" 2>/dev/null || echo "$EXPERIMENT_LABEL")
+  fi
+  
+  # Create experiment-specific backup folder by substituting the variable
+  experiment_dest="$(echo "$icloud_dest" | sed "s/\${EXPERIMENT_LABEL}/$experiment_label/g")"
+  mkdir -p "$experiment_dest"
+  
+  # Copy to experiment folder
+  cp "$dst" "$experiment_dest/run_results.${ts}.csv"
+  cp "$dst" "$experiment_dest/latest.csv"
+  
+  echo "iCloud mirror updated:"
+  echo "  Backup folder: $experiment_dest"
+  echo "  Experiment: $experiment_label"
 fi
 
 echo "Sync complete."

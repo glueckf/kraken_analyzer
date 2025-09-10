@@ -11,13 +11,16 @@ import hashlib
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import pandas as pd
 import yaml
 from dotenv import load_dotenv
+
+# Import experiment period management
+from experiment_manager import ExperimentPeriodManager
 
 # Configure logging
 logging.basicConfig(
@@ -26,7 +29,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def load_config(config_path: Path, env_path: Path) -> Dict[str, Any]:
+def load_config(config_path: Path, env_path: Path, periods_manager: Optional[ExperimentPeriodManager] = None) -> Dict[str, Any]:
     """Load configuration from YAML file and .env file."""
     # Load environment variables from .env file if it exists
     if env_path.exists():
@@ -42,9 +45,17 @@ def load_config(config_path: Path, env_path: Path) -> Dict[str, Any]:
         # Override with environment variables if they exist
         if "sources" in config and len(config["sources"]) > 0:
             source = config["sources"][0]
-            source["experiment_label"] = os.getenv(
+            
+            # Get current experiment label from environment
+            current_experiment_label = os.getenv(
                 "EXPERIMENT_LABEL", source.get("experiment_label", "unknown")
             )
+            
+            # Check if experiment has changed (for future experiment transitions)
+            if periods_manager and current_experiment_label != "unknown":
+                _handle_experiment_transition(current_experiment_label, periods_manager)
+            
+            source["experiment_label"] = current_experiment_label
             source["schema_version"] = os.getenv(
                 "SCHEMA_VERSION", source.get("schema_version", "v1")
             )
@@ -54,6 +65,21 @@ def load_config(config_path: Path, env_path: Path) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Failed to load config from {config_path}: {e}")
         sys.exit(1)
+
+
+def _handle_experiment_transition(current_label: str, periods_manager: ExperimentPeriodManager) -> None:
+    """Handle experiment transitions by managing periods."""
+    # This function will be used for future experiment transitions
+    # For now, it's a placeholder for the architecture
+    existing_periods = periods_manager.get_all_periods()
+    
+    # Check if current experiment already exists
+    if current_label not in existing_periods:
+        logger.info(f"New experiment detected: {current_label}")
+        # In the future, this would automatically register the new experiment
+        # For now, we'll just log it
+    else:
+        logger.debug(f"Continuing experiment: {current_label}")
 
 
 def get_snapshot_files(snapshots_dir: Path) -> List[Path]:
@@ -79,6 +105,34 @@ def extract_timestamp_from_filename(filepath: Path) -> Optional[str]:
     except Exception:
         pass
     return None
+
+
+def parse_timestamp_for_labeling(timestamp_str: str) -> datetime:
+    """Parse timestamp string and return timezone-aware datetime for experiment labeling."""
+    # Handle format like "2025:09:10T06:18:09Z"  
+    if ":" in timestamp_str and timestamp_str.count(":") > 2:
+        # Convert "2025:09:10T06:18:09Z" to "2025-09-10T06:18:09Z"
+        timestamp_str = timestamp_str.replace(":", "-", 2)
+    
+    # Remove 'Z' if present and parse
+    timestamp_str = timestamp_str.rstrip('Z')
+    dt = datetime.fromisoformat(timestamp_str)
+    
+    # Assume UTC if no timezone info
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    
+    return dt
+
+
+def get_experiment_label_for_timestamp(timestamp_str: str, periods_manager: ExperimentPeriodManager, fallback_label: str = "unknown") -> str:
+    """Get the correct experiment label for a given timestamp."""
+    try:
+        dt = parse_timestamp_for_labeling(timestamp_str)
+        return periods_manager.get_experiment_for_timestamp(dt)
+    except Exception as e:
+        logger.warning(f"Failed to determine experiment for timestamp {timestamp_str}: {e}")
+        return fallback_label
 
 
 def normalize_numeric_columns(df: pd.DataFrame) -> pd.DataFrame:
@@ -183,7 +237,7 @@ def get_processed_snapshots(output_path: Path) -> set:
     return set()
 
 
-def process_snapshots(config: Dict[str, Any], snapshots_dir: Path, output_path: Path) -> pd.DataFrame:
+def process_snapshots(config: Dict[str, Any], snapshots_dir: Path, output_path: Path, periods_manager: ExperimentPeriodManager) -> pd.DataFrame:
     """Process only new snapshot files and append to existing dataset."""
     snapshot_files = get_snapshot_files(snapshots_dir)
 
@@ -214,15 +268,25 @@ def process_snapshots(config: Dict[str, Any], snapshots_dir: Path, output_path: 
                 f"Loaded {len(df)} rows, {len(df.columns)} columns from {filepath.name}"
             )
 
-            # Add metadata columns - use current experiment label for new snapshots
-            df["experiment_label"] = source_config["experiment_label"]
+            # Extract timestamp from filename first
+            timestamp = extract_timestamp_from_filename(filepath)
+            timestamp_str = timestamp or datetime.utcnow().isoformat()
+            
+            # Determine experiment label based on timestamp, not current config
+            experiment_label = get_experiment_label_for_timestamp(
+                timestamp_str, 
+                periods_manager, 
+                source_config["experiment_label"]  # fallback to current config
+            )
+            
+            # Add metadata columns - use timestamp-based experiment label
+            df["experiment_label"] = experiment_label
             df["schema_version"] = source_config["schema_version"]
             df["source"] = source_config["name"]
             df["snapshot_file"] = filepath.name  # Track which snapshot this came from
-
-            # Extract timestamp from filename
-            timestamp = extract_timestamp_from_filename(filepath)
-            df["synced_at"] = timestamp or datetime.utcnow().isoformat()
+            df["synced_at"] = timestamp_str
+            
+            logger.info(f"Assigned experiment label '{experiment_label}' to {len(df)} rows from {filepath.name} (timestamp: {timestamp_str})")
 
             all_dataframes.append(df)
 
@@ -308,7 +372,17 @@ def main():
     env_path = root_dir / ".env"
     snapshots_dir = root_dir / "data" / "raw" / "cloud-11" / "snapshots"
     curated_dir = root_dir / "data" / "curated"
-    output_path = curated_dir / "experiments.parquet"
+    
+    # Default output path for backward compatibility
+    default_output_path = curated_dir / "experiments.parquet"
+    
+    # Schema-aware output path (future enhancement)
+    schema_version = os.getenv("SCHEMA_VERSION", "v1")
+    schema_output_path = curated_dir / f"experiments_{schema_version}.parquet"
+    
+    # For now, use default path to maintain backward compatibility
+    # In the future, this can be switched to schema_output_path
+    output_path = default_output_path
 
     # Ensure directories exist
     curated_dir.mkdir(parents=True, exist_ok=True)
@@ -321,13 +395,17 @@ def main():
         else:
             logger.info("Reset requested but no existing parquet file found")
 
+    # Setup experiment periods manager
+    periods_file = root_dir / "data" / "experiment_periods.json"
+    periods_manager = ExperimentPeriodManager(periods_file)
+    
     # Load configuration
     logger.info(f"Loading config from {config_path}")
-    config = load_config(config_path, env_path)
+    config = load_config(config_path, env_path, periods_manager)
 
     # Process snapshots
     logger.info("Starting data ingestion...")
-    df = process_snapshots(config, snapshots_dir, output_path)
+    df = process_snapshots(config, snapshots_dir, output_path, periods_manager)
 
     if df.empty:
         if args.reset or not output_path.exists():
